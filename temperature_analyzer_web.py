@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -8,11 +9,12 @@ import re
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import json
 
 # Configuração da página
 st.set_page_config(page_title="Analisador de Temperatura e Energia", layout="wide")
 
-# CSS avançado para um visual mais próximo do CustomTkinter
+# CSS avançado para visual Tkinter-like
 st.markdown("""
 <style>
     .main {
@@ -251,6 +253,71 @@ def mostrar_estatisticas(df, modo, pontos_filtrados=None, pontos_marcados=None):
             for _, _, x, y, tipo in pontos_marcados:
                 unit_p = "%" if tipo == "Umidade" else ("W" if "Potência" in tipo else "°C")
                 st.write(f"{x.strftime('%Y/%m/%d %H:%M:%S')} - {y:.1f}{unit_p} ({tipo})")
+        return {
+            "Total": total,
+            "Válidos": validos,
+            "Inválidos": invalidos,
+            f"{main_column}_Máxima": f"{max_val:.2f}{unit}" if not df[main_column].isna().all() and pd.api.types.is_numeric_dtype(df[main_column]) else "N/A",
+            f"{main_column}_Mínima": f"{min_val:.2f}{unit}" if not df[main_column].isna().all() and pd.api.types.is_numeric_dtype(df[main_column]) else "N/A",
+            f"{main_column}_Média": f"{mean_val:.2f}{unit}" if not df[main_column].isna().all() and pd.api.types.is_numeric_dtype(df[main_column]) else "N/A",
+            "Umidade_Máxima": f"{umidade_max:.2f}%" if modo == "DATALOGGER" and "Umidade" in df.columns and not df["Umidade"].isna().all() else "N/A",
+            "Umidade_Mínima": f"{umidade_min:.2f}%" if modo == "DATALOGGER" and "Umidade" in df.columns and not df["Umidade"].isna().all() else "N/A",
+            "Umidade_Média": f"{umidade_media:.2f}%" if modo == "DATALOGGER" and "Umidade" in df.columns and not df["Umidade"].isna().all() else "N/A",
+            "Intervalo": f"{inicio} até {fim}",
+            "Pontos_Filtrados": [(x.strftime('%Y/%m/%d %H:%M:%S'), y, tipo) for _, x, y, tipo in pontos_filtrados] if pontos_filtrados else [],
+            "Pontos_Marcados": [(x.strftime('%Y/%m/%d %H:%M:%S'), y, tipo) for _, _, x, y, tipo in pontos_marcados] if pontos_marcados else []
+        }
+
+def salvar_configuracoes():
+    config = {
+        "filtro_ativo": st.session_state.get('filtro_ativo'),
+        "filtro_valor_min": st.session_state.get('filtro_valor_min'),
+        "filtro_valor_max": st.session_state.get('filtro_valor_max'),
+        "filtro_valor_tipo": st.session_state.get('filtro_valor_tipo'),
+        "escala_y_min": st.session_state.get('escala_y_min'),
+        "escala_y_max": st.session_state.get('escala_y_max'),
+        "faixas": st.session_state.get('faixas', []),
+        "pontos_marcados": [(None, None, x.strftime('%Y/%m/%d %H:%M:%S'), y, tipo) for _, _, x, y, tipo in st.session_state.get('pontos_marcados', [])]
+    }
+    buf = BytesIO()
+    buf.write(json.dumps(config, ensure_ascii=False).encode('utf-8'))
+    return buf
+
+def carregar_configuracoes(uploaded_config):
+    try:
+        config = json.load(uploaded_config)
+        if "filtro_ativo" in config:
+            st.session_state['filtro_ativo'] = config["filtro_ativo"]
+        if "filtro_valor_min" in config:
+            st.session_state['filtro_valor_min'] = config["filtro_valor_min"]
+        if "filtro_valor_max" in config:
+            st.session_state['filtro_valor_max'] = config["filtro_valor_max"]
+        if "filtro_valor_tipo" in config:
+            st.session_state['filtro_valor_tipo'] = config["filtro_valor_tipo"]
+        if "escala_y_min" in config:
+            st.session_state['escala_y_min'] = config["escala_y_min"]
+        if "escala_y_max" in config:
+            st.session_state['escala_y_max'] = config["escala_y_max"]
+        if "faixas" in config:
+            st.session_state['faixas'] = config["faixas"]
+        if "pontos_marcados" in config:
+            st.session_state['pontos_marcados'] = [(None, None, pd.to_datetime(x), y, tipo) for _, _, x, y, tipo in config["pontos_marcados"]]
+        st.success("Configurações carregadas com sucesso!")
+    except:
+        st.error("Erro ao carregar configurações. Verifique o formato do arquivo JSON.")
+
+def gerar_relatorio(df, modo, estatisticas, fig):
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        df_export = df.copy()
+        if "DataHora_str" in df_export.columns:
+            df_export = df_export.drop(columns=["DataHora"]).rename(columns={"DataHora_str": "DataHora"})
+        else:
+            df_export["DataHora"] = df_export["DataHora"].dt.strftime("%Y/%m/%d %H:%M:%S")
+        df_export.to_excel(writer, sheet_name="Dados", index=False)
+        stats_df = pd.DataFrame([estatisticas])
+        stats_df.to_excel(writer, sheet_name="Estatísticas", index=False)
+    return buf
 
 def main():
     st.markdown('<div class="main">', unsafe_allow_html=True)
@@ -280,7 +347,7 @@ def main():
     if 'escala_y_max' not in st.session_state:
         st.session_state['escala_y_max'] = None
 
-    # Layout em colunas para imitar Tkinter
+    # Layout em colunas
     col_left, col_right = st.columns([1, 3])
 
     with col_left:
@@ -367,6 +434,14 @@ def main():
                                 st.success("Filtro de hora aplicado.")
                         except:
                             st.error("Formato inválido. Use HH:MM.")
+                if st.button("Limpar Filtros", key="limpar_filtros", type="primary"):
+                    st.session_state['dados_filtrados'] = st.session_state['dados_consolidados']
+                    st.session_state['filtro_ativo'] = None
+                    st.session_state['filtro_valor_min'] = None
+                    st.session_state['filtro_valor_max'] = None
+                    st.session_state['filtro_valor_tipo'] = None
+                    st.session_state['pontos_filtrados'] = []
+                    st.success("Filtros limpos.")
             with col_f2:
                 st.write("**Filtro de Valor**")
                 df = st.session_state['dados_filtrados'] if not st.session_state['dados_filtrados'].empty else st.session_state['dados_consolidados']
@@ -418,6 +493,19 @@ def main():
                 except:
                     st.error("Formato de data inválido.")
 
+        # Configurações
+        with st.container():
+            st.markdown("### Configurações")
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                if st.button("Salvar Configurações", key="salvar_config", type="primary"):
+                    buf = salvar_configuracoes()
+                    st.download_button("Baixar Configurações", buf.getvalue(), "configuracoes.json", type="primary")
+            with col_c2:
+                config_file = st.file_uploader("Carregar Configurações", type=["json"])
+                if config_file and st.button("Aplicar Configurações", key="carregar_config", type="primary"):
+                    carregar_configuracoes(config_file)
+
     with col_right:
         if not st.session_state['dados_consolidados'].empty:
             df = st.session_state['dados_filtrados'] if not st.session_state['dados_filtrados'].empty else st.session_state['dados_consolidados']
@@ -427,6 +515,8 @@ def main():
                 title = "Gráfico de Dados" if st.session_state['dados_filtrados'].empty else f"Gráfico da Faixa: {df['DataHora'].min().strftime('%Y/%m/%d %H:%M:%S')} a {df['DataHora'].max().strftime('%Y/%m/%d %H:%M:%S')}"
                 fig = gerar_grafico(df, modo, st.session_state['filtro_ativo'], st.session_state['filtro_valor_min'], st.session_state['filtro_valor_max'], st.session_state['filtro_valor_tipo'], st.session_state['escala_y_min'], st.session_state['escala_y_max'], title, st.session_state['pontos_marcados'], st.session_state['pontos_filtrados'])
                 st.plotly_chart(fig, use_container_width=True)
+                if st.button("Atualizar Gráfico", key="atualizar_grafico", type="primary"):
+                    st.rerun()
 
             # Verificar exportação de gráfico
             try:
@@ -438,7 +528,7 @@ def main():
                 st.warning("Exportação de gráfico PNG não disponível devido a limitações do ambiente.")
 
             # Estatísticas
-            mostrar_estatisticas(df, modo, st.session_state['pontos_filtrados'], st.session_state['pontos_marcados'])
+            estatisticas = mostrar_estatisticas(df, modo, st.session_state['pontos_filtrados'], st.session_state['pontos_marcados'])
 
     # Múltiplas Faixas e Exportações
     with st.container():
@@ -479,7 +569,7 @@ def main():
 
     with st.container():
         st.markdown("### Exportações")
-        col_e1, col_e2 = st.columns(2)
+        col_e1, col_e2, col_e3 = st.columns(3)
         with col_e1:
             buf = BytesIO()
             df_export = df.copy() if not st.session_state['dados_consolidados'].empty else pd.DataFrame()
@@ -497,6 +587,10 @@ def main():
                 st.download_button("Exportar Gráfico PNG", buf.getvalue(), "grafico.png", type="primary")
             else:
                 st.write("Exportação de PNG indisponível.")
+        with col_e3:
+            if not st.session_state['dados_consolidados'].empty:
+                buf = gerar_relatorio(df, modo, estatisticas, fig)
+                st.download_button("Exportar Relatório", buf.getvalue(), "relatorio.xlsx", type="primary")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
