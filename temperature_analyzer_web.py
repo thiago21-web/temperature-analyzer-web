@@ -380,6 +380,15 @@ def main():
         fig = gerar_grafico(df, modo, st.session_state['filtro_ativo'], st.session_state['filtro_valor_min'], st.session_state['filtro_valor_max'], st.session_state['filtro_valor_tipo'], st.session_state['escala_y_min'], st.session_state['escala_y_max'], title, st.session_state['pontos_marcados'], st.session_state['pontos_filtrados'])
         st.plotly_chart(fig, use_container_width=True)
 
+        # Verificar se o gráfico pode ser exportado
+        try:
+            buf = BytesIO()
+            fig.write_image(buf, format="png")
+            st.session_state['grafico_exportavel'] = True
+        except Exception as e:
+            st.session_state['grafico_exportavel'] = False
+            st.warning("Exportação de gráfico PNG não disponível devido a limitações do ambiente. Teste localmente ou verifique as dependências.")
+
         # Estatísticas
         mostrar_estatisticas(df, modo, st.session_state['pontos_filtrados'], st.session_state['pontos_marcados'])
 
@@ -432,9 +441,12 @@ def main():
             df_export.to_excel(buf, index=False)
             st.download_button("Exportar Excel Consolidado", buf.getvalue(), "dados_consolidados.xlsx")
         with col_e2:
-            buf = BytesIO()
-            fig.write_image(buf, format="png")
-            st.download_button("Exportar Gráfico PNG", buf.getvalue(), "grafico.png")
+            if st.session_state.get('grafico_exportavel', False):
+                buf = BytesIO()
+                fig.write_image(buf, format="png")
+                st.download_button("Exportar Gráfico PNG", buf.getvalue(), "grafico.png")
+            else:
+                st.write("Exportação de PNG indisponível.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
